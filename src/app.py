@@ -3,6 +3,7 @@ import uuid
 import base64
 import fitz
 import io
+import magic
 
 import PIL.Image
 
@@ -14,8 +15,6 @@ import chromadb.api
 
 from unstructured.partition.auto import partition
 from unstructured.partition.common import UnsupportedFileFormatError
-
-from IPython.display import Image, display
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -29,11 +28,32 @@ from langchain.storage import InMemoryStore
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain.retrievers.multi_vector import MultiVectorRetriever
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 
+def mime_type(file):
+    file_magic = magic.Magic(mime=True)
+    file.seek(0)
+    mime_type = file_magic.from_buffer(file.read())
+    return mime_type
 
+# Check if str is base64
+def isBase64(sb):
+        try:
+                if isinstance(sb, str):
+                        # If there's any unicode here, an exception will be thrown and the function will return false
+                        sb_bytes = bytes(sb, 'ascii')
+                elif isinstance(sb, bytes):
+                        sb_bytes = sb
+                else:
+                        raise ValueError("Argument must be string or bytes")
+                return base64.b64encode(base64.b64decode(sb_bytes)) == sb_bytes
+        except Exception:
+                return False
+        
 # Pass in grouped elements and return a list of base64 images
 def get_images_base64(chunks):
     images_b64 = []
@@ -49,8 +69,11 @@ def get_images_base64(chunks):
 def display_base64_image(base64_code):
     # Decode the base64 string to binary
     image_data = base64.b64decode(base64_code)
-    # Display the image
-    display(Image(data=image_data))
+    # Convert the binary data to an image
+    image = PIL.Image.open(io.BytesIO(image_data))
+
+    # Display the image in Streamlit
+    st.image(image)
 
 def summarize(texts, tables, images):
 
@@ -112,22 +135,28 @@ def summarize(texts, tables, images):
 
 
 def display_chunk_pages(file, chunk):
-    page_numbers = extract_page_number_from_chunk(chunk)
-    
-    docs = []
-    for element in chunk.metadata.orig_elements:
-        metadata = element.metadata.to_dict()
-        if "Table" in str(type(element)):
-            metadata["category"] = "Table"
-        elif "Image" in str(type(element)):
-            metadata["category"] = "Image"
+    try:
+        page_numbers = extract_page_number_from_chunk(chunk)
+        
+        docs = []
+        for element in chunk.metadata.orig_elements:
+            metadata = element.metadata.to_dict()
+            if "Table" in str(type(element)):
+                metadata["category"] = "Table"
+            elif "Image" in str(type(element)):
+                metadata["category"] = "Image"
+            else:
+                metadata["category"] = "Text"
+        
+            docs.append(Document(page_content=element.text, metadata=metadata))
+        
+        for page_number in page_numbers:
+            render_page(file, docs, page_number, False)
+    except Exception as e:
+        if isBase64(chunk):
+            display_base64_image(chunk)
         else:
-            metadata["category"] = "Text"
-    
-        docs.append(Document(page_content=element.text, metadata=metadata))
-    
-    for page_number in page_numbers:
-        render_page(file, docs, page_number, False)
+            st.write(f"Error: {e}")
 
 def extract_page_number_from_chunk(chunk):
     elements = chunk.metadata.orig_elements
@@ -139,10 +168,8 @@ def extract_page_number_from_chunk(chunk):
     return page_numbers
 
 def render_page(file, doc_list: list, page_number: int, print_text=True) -> None:
-    print(f"Render_page's file: {file}")
     file.seek(0)
     bytes_stream = file.read()
-    print(f"Render_page's bytes_stream: {bytes_stream[:50]}")
     pdf_page = fitz.open(stream=bytes_stream).load_page(page_number - 1)
     page_docs = [
         doc for doc in doc_list if doc.metadata.get("page_number") == page_number
@@ -152,7 +179,6 @@ def render_page(file, doc_list: list, page_number: int, print_text=True) -> None
     if print_text:
         for doc in page_docs:
             print(f"{doc.page_content}\n")
-
 
 def plot_pdf_with_boxes(pdf_page, segments):
     pix = pdf_page.get_pixmap()
@@ -193,6 +219,56 @@ def plot_pdf_with_boxes(pdf_page, segments):
     plt.tight_layout()
     st.pyplot(fig)
 
+def parse_docs(docs):
+    """Split base64-encoded images and texts"""
+    b64 = []
+    text = []
+    for doc in docs:
+        try:
+            base64.b64decode(doc)
+            b64.append(doc)
+        except Exception as e:
+            text.append(doc)
+    return {"images": b64, "texts": text}
+
+def build_prompt(kwargs):
+
+    docs_by_type = kwargs["context"]
+    user_question = kwargs["question"]
+
+    context_text = ""
+    
+    try:
+        if len(docs_by_type["texts"]) > 0:
+            for text_element in docs_by_type["texts"]:
+                context_text += text_element.text
+    except AttributeError:
+        st.write(text_element)
+
+    # construct prompt with context (including images)
+    prompt_template = f"""
+    Answer the question based only on the following context, which can include text, tables, and the below image.
+    Context: {context_text}
+    Question: {user_question}
+    """
+
+    prompt_content = [{"type": "text", "text": prompt_template}]
+
+    if len(docs_by_type["images"]) > 0:
+        for image in docs_by_type["images"]:
+            prompt_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                }
+            )
+
+    return ChatPromptTemplate.from_messages(
+        [
+            HumanMessage(content=prompt_content),
+        ]
+    )
+
 
 def main():
     # Load the environment variables
@@ -205,7 +281,7 @@ def main():
     print("\nPreviously Processed File: ", st.session_state.processed_file)
 
     # PDF only for now
-    file = st.file_uploader("Upload your file", type=["pdf"])
+    file = st.file_uploader("Upload your file")
     if file is not None:
         print("\nCurrent File: ",file)
 
@@ -283,16 +359,38 @@ def main():
                         retriever.vectorstore.add_documents(summary_img)
                         retriever.docstore.mset(list(zip(img_ids, images)))
                     
+
                     st.session_state.processed_file = file
                     print("\nFile sucessfuly processed, ready for query: ", st.session_state.processed_file)
                     st.session_state.retriever = retriever
 
                 docs = st.session_state.retriever.invoke(user_query)
+                
+                chain = (
+                    {
+                        "context": st.session_state.retriever | RunnableLambda(parse_docs),
+                        "question": RunnablePassthrough(),
+                    }
+                    | RunnableLambda(build_prompt)
+                    | ChatOpenAI(model="gpt-4o-mini")
+                    | StrOutputParser()
+                )
 
-                st.write("Here are the results of your query:")
+                with get_openai_callback() as cb:
+                    response = chain.invoke(
+                        "What is the attention mechanism?"
+                    )
+                    print(cb,"\n\n")
+                
+                with st.chat_message("AI"):
+                    st.markdown(response)   
 
-                for doc in docs:
-                    display_chunk_pages(file, doc)
+                if mime_type(file) == "application/pdf":
+                    with st.expander("Possibly Related Sources"):
+                        for doc in docs:
+                            display_chunk_pages(file, doc)
+                else:
+                    st.write("For more visualisation on related sources, please upload the document as a PDF file.")
                 
 
             except UnsupportedFileFormatError as e:
