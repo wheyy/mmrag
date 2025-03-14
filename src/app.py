@@ -378,7 +378,7 @@ def main():
 
                 with get_openai_callback() as cb:
                     response = chain.invoke(
-                        "What is the attention mechanism?"
+                        user_query
                     )
                     print(cb,"\n\n")
                 
