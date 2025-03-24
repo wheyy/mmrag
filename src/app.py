@@ -27,7 +27,8 @@ from langchain.vectorstores import Chroma
 from langchain.storage import InMemoryStore
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
-from langchain.retrievers.multi_vector import MultiVectorRetriever
+from langchain.retrievers.multi_vector import MultiVectorRetriever, SearchType
+from custom_retriever import CustomMultiVectorRetriever
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
 
@@ -133,7 +134,6 @@ def summarize(texts, tables, images):
 
     return text_summaries, table_summaries, image_summaries
 
-
 def display_chunk_pages(file, chunk):
     try:
         page_numbers = extract_page_number_from_chunk(chunk)
@@ -225,10 +225,10 @@ def parse_docs(docs):
     text = []
     for doc in docs:
         try:
-            base64.b64decode(doc)
-            b64.append(doc)
+            base64.b64decode(doc['doc'])
+            b64.append(doc['doc'])
         except Exception as e:
-            text.append(doc)
+            text.append(doc['doc'])
     return {"images": b64, "texts": text}
 
 def build_prompt(kwargs):
@@ -247,7 +247,8 @@ def build_prompt(kwargs):
 
     # construct prompt with context (including images)
     prompt_template = f"""
-    Answer the question based only on the following context, which can include text, tables, and the below image.
+    Please answer the question using only the context provided, which includes the text, tables, and image below. 
+    Do not rely on any external knowledge.
     Context: {context_text}
     Question: {user_question}
     """
@@ -271,19 +272,17 @@ def build_prompt(kwargs):
 
 
 def main():
-    # Load the environment variables
     load_dotenv()
     st.set_page_config(page_title="MMRAG", page_icon="🤖")
     st.header("Multimodal Retrieval Augmented Generative Chatbot")
 
     if "processed_file" not in st.session_state:
         st.session_state.processed_file = None
-    print("\nPreviously Processed File: ", st.session_state.processed_file)
+    # print("\nPreviously Processed File: ", st.session_state.processed_file)
 
-    # PDF only for now
     file = st.file_uploader("Upload your file")
     if file is not None:
-        print("\nCurrent File: ",file)
+        # print("\nCurrent File: ",file)
 
         # Chat with the model
         user_query = st.chat_input("What would you like to know?")
@@ -325,12 +324,21 @@ def main():
                     store = InMemoryStore()
                     id_key = "doc_id"
 
-                    # The retriever (empty to start)
-                    retriever = MultiVectorRetriever(
+                    # Custom Retriever to return similarity scores
+                    retriever = CustomMultiVectorRetriever(
                         vectorstore=vectorstore,
                         docstore=store,
                         id_key=id_key,
+                        # search_kwargs={"score_threshold": 0.45},
                     )
+
+                    # retriever = MultiVectorRetriever(
+                    #     vectorstore=vectorstore,
+                    #     docstore=store,
+                    #     id_key=id_key,
+                    #     search_kwargs={"score_threshold": 0.45},
+                    #     search_type="similarity_score_threshold",
+                    # )
 
                     # Add texts
                     if texts:
@@ -359,7 +367,6 @@ def main():
                         retriever.vectorstore.add_documents(summary_img)
                         retriever.docstore.mset(list(zip(img_ids, images)))
                     
-
                     st.session_state.processed_file = file
                     print("\nFile sucessfuly processed, ready for query: ", st.session_state.processed_file)
                     st.session_state.retriever = retriever
@@ -387,8 +394,10 @@ def main():
 
                 if mime_type(file) == "application/pdf":
                     with st.expander("Possibly Related Sources"):
+                        st.write("Similarity score is between 0 and 1. The higher the score, the more similar the source is to the query.")
                         for doc in docs:
-                            display_chunk_pages(file, doc)
+                            st.write("Similarity score:", doc["sub_docs"][0].metadata["score"])
+                            display_chunk_pages(file, doc['doc'])
                 else:
                     st.write("For more visualisation on related sources, please upload the document as a PDF file.")
                 
