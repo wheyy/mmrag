@@ -31,32 +31,53 @@ from langchain.retrievers.multi_vector import MultiVectorRetriever, SearchType
 from custom_retriever import CustomMultiVectorRetriever
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
-
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 
 def mime_type(file):
+    """
+    Determines the MIME type of a given file.
+
+    Args:
+        file: file object, file here is the file directly uploaded through st.file_uploader
+    Returns:
+        mime_type: str
+    """
     file_magic = magic.Magic(mime=True)
     file.seek(0)
     mime_type = file_magic.from_buffer(file.read())
     return mime_type
 
-# Check if str is base64
 def isBase64(sb):
-        try:
-                if isinstance(sb, str):
-                        # If there's any unicode here, an exception will be thrown and the function will return false
-                        sb_bytes = bytes(sb, 'ascii')
-                elif isinstance(sb, bytes):
-                        sb_bytes = sb
-                else:
-                        raise ValueError("Argument must be string or bytes")
-                return base64.b64encode(base64.b64decode(sb_bytes)) == sb_bytes
-        except Exception:
-                return False
+    """
+    Check if a string is base64 encoded.
+
+    Args:
+        sb: str, string to check
+    Returns:
+        bool: True if the string is base64 encoded, False otherwise
+    """
+    try:
+            if isinstance(sb, str):
+                    # If there's any unicode here, an exception will be thrown and the function will return false
+                    sb_bytes = bytes(sb, 'ascii')
+            elif isinstance(sb, bytes):
+                    sb_bytes = sb
+            else:
+                    raise ValueError("Argument must be string or bytes")
+            return base64.b64encode(base64.b64decode(sb_bytes)) == sb_bytes
+    except Exception:
+            return False
         
-# Pass in grouped elements and return a list of base64 images
 def get_images_base64(chunks):
+    """
+    Extract images from a list of chunks.
+    
+    Args:
+        chunks: list, list of chunks
+    Returns:
+        images_b64: list, list of images, in base64 format
+    """
     images_b64 = []
     for chunk in chunks:
         if chunk.category == "CompositeElement":
@@ -66,8 +87,15 @@ def get_images_base64(chunks):
                 images_b64.append(el.metadata.image_base64)
     return images_b64
 
-# Display base64 image
 def display_base64_image(base64_code):
+    """
+    Display a base64 encoded image in Streamlit.
+
+    Args:
+        base64_code: str, base64 encoded image
+    Returns:
+        None, just directly displays the image in Streamlit interface
+    """
     # Decode the base64 string to binary
     image_data = base64.b64decode(base64_code)
     # Convert the binary data to an image
@@ -77,6 +105,18 @@ def display_base64_image(base64_code):
     st.image(image)
 
 def summarize(texts, tables, images):
+    """
+    Summarize texts, tables, and images using gpt-4o-mini model.
+
+    Args:
+        texts: list, list of text chunks (CompositeElement)
+        tables: list, list of table chunks (TableElement)
+        images: list, list of images in base64 format
+    Returns:
+        text_summaries: list, list of text summaries
+        table_summaries: list, list of table summaries
+        image_summaries: list, list of image summaries
+    """
 
     prompt_text = """
     You are an assistant tasked with summarizing tables and texts.
@@ -100,7 +140,7 @@ def summarize(texts, tables, images):
         print(f"Text Summaries Cost:\n\n{cb}\n\n")
 
     # Summarize tables
-    tables_html = [table.metadata.text_as_html for table in tables] # allows the model to better understand the structure of the table for additional context
+    tables_html = [table.metadata.text_as_html for table in tables] # parsed to the model as html as it allows the model to better understand the structure of the table for additional context
     with get_openai_callback() as cb:
         table_summaries = summarize_chain.batch(tables_html, {"max_concurrency": 3})
         print(f"Table Summaries Cost:\n\n{cb}\n\n")
@@ -135,6 +175,16 @@ def summarize(texts, tables, images):
     return text_summaries, table_summaries, image_summaries
 
 def display_chunk_pages(file, chunk):
+    """
+    Display the pages of a chunk in a PDF file. 
+    Works with render_page, plot_pdf_with_boxes, extract_page_number_from_chunk and display_base64_image functions.
+    
+    Args:
+        file: file object, file here is the file directly uploaded through st.file_uploader
+        chunk: chunk, chunk to display
+    Returns:
+        None, just directly displays the pages in Streamlit interface
+    """
     try:
         page_numbers = extract_page_number_from_chunk(chunk)
         
@@ -159,6 +209,13 @@ def display_chunk_pages(file, chunk):
             st.write(f"Error: {e}")
 
 def extract_page_number_from_chunk(chunk):
+    """
+    Extract page numbers from a chunk.
+    
+    Args:
+        chunk: chunk, chunk to extract page numbers from
+    Returns:
+        page_numbers: set, set of page numbers"""
     elements = chunk.metadata.orig_elements
 
     page_numbers = set()
@@ -168,6 +225,16 @@ def extract_page_number_from_chunk(chunk):
     return page_numbers
 
 def render_page(file, doc_list: list, page_number: int, print_text=True) -> None:
+    """
+    Passes the page and the segments to be plotted out to the plot_pdf_with_boxes function.
+    
+    Args:
+        file: file object, file here is the file directly uploaded through st.file_uploader
+        doc_list: list, list of documents
+        page_number: int, page number to render
+    Returns:
+        None
+    """
     file.seek(0)
     bytes_stream = file.read()
     pdf_page = fitz.open(stream=bytes_stream).load_page(page_number - 1)
@@ -181,6 +248,15 @@ def render_page(file, doc_list: list, page_number: int, print_text=True) -> None
             print(f"{doc.page_content}\n")
 
 def plot_pdf_with_boxes(pdf_page, segments):
+    """
+    Plots the PDF page with bounding boxes around the specified segments.
+    
+    Args:
+        pdf_page: fitz.Page, PDF page to plot
+        segments: list, list of segments to plot
+    Returns:
+        None, just directly displays the PDF page in Streamlit interface
+    """
     pix = pdf_page.get_pixmap()
     pil_image = PIL.Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
@@ -220,7 +296,14 @@ def plot_pdf_with_boxes(pdf_page, segments):
     st.pyplot(fig)
 
 def parse_docs(docs):
-    """Split base64-encoded images and texts"""
+    """
+    Split base64-encoded images and texts
+    
+    Args:
+        docs: list, list of documents
+    Returns:
+        dict: dictionary containing images and texts
+    """
     b64 = []
     text = []
     for doc in docs:
@@ -232,7 +315,14 @@ def parse_docs(docs):
     return {"images": b64, "texts": text}
 
 def build_prompt(kwargs):
-
+    """
+    Build prompt to query the model.
+    
+    Args:
+        kwargs: dict, dictionary containing context and question
+    Returns:
+        ChatPromptTemplate: prompt to query the model
+    """
     docs_by_type = kwargs["context"]
     user_question = kwargs["question"]
 
@@ -295,10 +385,11 @@ def main():
                 if file == st.session_state.processed_file:
                     print("File already summarized and in ChromeDB")
                 else:
+                    
                     # partitioning the file
                     chunks = partition(
                         file = file,
-                        strategy="hi_res",               # mandatory to infer tables
+                        strategy="hi_res",  # mandatory to infer tables
                         
                         extract_image_block_types=["Image"],      
                         extract_image_block_to_payload=True,   # to extract base64 for API usage
@@ -329,16 +420,7 @@ def main():
                         vectorstore=vectorstore,
                         docstore=store,
                         id_key=id_key,
-                        # search_kwargs={"score_threshold": 0.45},
                     )
-
-                    # retriever = MultiVectorRetriever(
-                    #     vectorstore=vectorstore,
-                    #     docstore=store,
-                    #     id_key=id_key,
-                    #     search_kwargs={"score_threshold": 0.45},
-                    #     search_type="similarity_score_threshold",
-                    # )
 
                     # Add texts
                     if texts:
@@ -394,10 +476,15 @@ def main():
 
                 if mime_type(file) == "application/pdf":
                     with st.expander("Possibly Related Sources"):
-                        st.write("Similarity score is between 0 and 1. The higher the score, the more similar the source is to the query.")
-                        for doc in docs:
-                            st.write("Similarity score:", doc["sub_docs"][0].metadata["score"])
-                            display_chunk_pages(file, doc['doc'])
+                        # st.write("Similarity score is between 0 and 1. The higher the score, the more similar the source is to the query.")
+                        min_score = 0.7 # after testing, this is the optimal score to filter out unrelated sources
+                        filtered_docs = [doc for doc in docs if doc["sub_docs"][0].metadata["score"] > min_score]
+                        if filtered_docs:
+                            for doc in docs:
+                                st.write("Similarity score:", doc["sub_docs"][0].metadata["score"])
+                                display_chunk_pages(file, doc['doc'])
+                        else:
+                            st.write("No related sources found.")
                 else:
                     st.write("For more visualisation on related sources, please upload the document as a PDF file.")
                 

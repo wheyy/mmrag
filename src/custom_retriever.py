@@ -16,7 +16,7 @@ class CustomMultiVectorRetriever(MultiVectorRetriever):
             query: String to find relevant documents for
             run_manager: The callbacks handler to use
         Returns:
-            List of relevant documents
+            List of relevant documents. Return Format: [{"doc": Document, "sub_docs": List[Document]}]
         """
 
         results = self.vectorstore._similarity_search_with_relevance_scores(
@@ -42,7 +42,7 @@ class CustomMultiVectorRetriever(MultiVectorRetriever):
             # print("type of sub_docs", type(sub_docs))
             if docstore_docs:
                 if doc := docstore_docs[0]:
-                    doc_w_sub_docs = {"doc": doc, "sub_docs": sub_docs}
+                    doc_w_sub_docs = {"doc": doc, "sub_docs": sub_docs} # This is done as I am unable to edit the metadata of the doc directly
                     docs.append(doc_w_sub_docs)
 
         return docs
