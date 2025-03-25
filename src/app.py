@@ -1,4 +1,3 @@
-# pip install langchain streamlit langchain-openai python-dotenv
 import uuid
 import base64
 import fitz
